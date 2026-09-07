@@ -9,7 +9,14 @@ import {
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 
-import { newCommandId, readThread, readWritableThread, unavailable } from "../../threadAccess.ts";
+import {
+  newCommandId,
+  readCaller,
+  readThread,
+  readWritableThread,
+  unavailable,
+} from "../../threadAccess.ts";
+import * as ProjectionSnapshotQuery from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { queuedRunsInDeliveryOrder } from "../../../orchestration-v2/QueuedRunOrder.ts";
 import { ThreadToolkit } from "./tools.ts";
 
@@ -60,6 +67,13 @@ const readQuestion = Effect.fn("mcp.readQuestion")(function* (
   return { ...context, request, item };
 });
 export const ThreadToolkitHandlersLive = ThreadToolkit.toLayer({
+  t3_thread_search: (input) =>
+    Effect.gen(function* () {
+      const { caller } = yield* readCaller();
+      const query = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
+      const result = yield* query.searchThreads(input).pipe(Effect.mapError(unavailable));
+      return { matches: result.matches.filter((match) => match.projectId === caller.projectId) };
+    }),
   t3_thread_fork: (input) =>
     Effect.gen(function* () {
       const { threads, projection } = yield* readWritableThread();
