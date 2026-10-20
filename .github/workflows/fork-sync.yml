@@ -1,0 +1,73 @@
+# Keeps main = upstream's newest published nightly + this fork's commits.
+# SYNC_TOKEN: fine-grained PAT on this repo with Contents and Workflows write;
+# GITHUB_TOKEN cannot push commits that touch .github/workflows.
+# A failed scheduled run emails whoever last edited the cron line.
+name: Fork Sync
+
+on:
+  schedule:
+    - cron: "17 */2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-sync
+  cancel-in-progress: false
+
+jobs:
+  rebase:
+    name: Rebase onto nightly
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      changed: ${{ steps.sync.outputs.changed }}
+      tag: ${{ steps.sync.outputs.tag }}
+      nightly: ${{ steps.sync.outputs.nightly }}
+      old_main: ${{ steps.sync.outputs.old_main }}
+      candidate: ${{ steps.sync.outputs.candidate }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+          filter: blob:none
+          token: ${{ secrets.SYNC_TOKEN }}
+      - run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/pingdotgg/t3code.git
+      - id: sync
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: .github/fork/sync-nightly.sh
+      - if: steps.sync.outputs.changed == 'true'
+        run: git push --force origin HEAD:refs/heads/sync/candidate
+
+  verify:
+    needs: rebase
+    if: needs.rebase.outputs.changed == 'true'
+    uses: ./.github/workflows/fork-ci.yml
+    with:
+      ref: ${{ needs.rebase.outputs.candidate }}
+
+  publish:
+    name: Publish
+    needs: [rebase, verify]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: sync/candidate
+          fetch-depth: 0
+          filter: blob:none
+          token: ${{ secrets.SYNC_TOKEN }}
+      - env:
+          CANDIDATE: ${{ needs.rebase.outputs.candidate }}
+          NIGHTLY: ${{ needs.rebase.outputs.nightly }}
+          OLD_MAIN: ${{ needs.rebase.outputs.old_main }}
+        run: |
+          git push --atomic --force-with-lease=main:"$OLD_MAIN" origin \
+            "$CANDIDATE:refs/heads/main" "$NIGHTLY:refs/heads/upstream" :refs/heads/sync/candidate
