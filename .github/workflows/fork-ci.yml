@@ -1,0 +1,89 @@
+# Upstream's ci.yml runs on Blacksmith runners, which this fork has none of, so
+# it stays disabled here. This mirrors its checks on GitHub-hosted runners.
+name: Fork CI
+
+on:
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      ref:
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-ci-${{ inputs.ref || github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: ./.github/actions/setup-ci-deps
+      - run: vp run --filter @t3tools/desktop ensure:electron
+      - run: vp run knip:check
+      - run: vp check
+
+  build:
+    name: Build and Typecheck
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref }}
+      - run: sudo apt-get update && sudo apt-get install -y libsecret-1-dev pkg-config
+      - uses: ./.github/actions/setup-ci-deps
+      - run: vp run --filter @t3tools/desktop ensure:electron
+      - run: vp run build:desktop
+      - run: node apps/desktop/scripts/verify-preload-bundle.mjs
+      - run: vpr typecheck
+
+  test:
+    name: Test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref }}
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends build-essential libsecret-1-dev pkg-config
+      - uses: ./.github/actions/setup-ci-deps
+      - run: vp run --filter @t3tools/desktop ensure:electron
+      - run: vp run --parallel --concurrency-limit 4 --filter '!t3' --filter '!@t3tools/monorepo' --filter '!@t3tools/web' test
+
+  test_web:
+    name: Test Web
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: ./.github/actions/setup-ci-deps
+      - run: node apps/web/node_modules/playwright/cli.js install --with-deps --only-shell chromium
+      - run: vp run --filter @t3tools/web test
+
+  test_server:
+    name: Test Server ${{ matrix.shard }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: ./.github/actions/setup-ci-deps
+      - run: node apps/server/node_modules/playwright-core/cli.js install --with-deps --only-shell chromium
+      - run: vp run --filter t3 test --shard ${{ matrix.shard }}/${{ strategy.job-total }}
