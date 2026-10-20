@@ -71,4 +71,3 @@ jobs:
         run: |
           git push --atomic --force-with-lease=main:"$OLD_MAIN" origin \
             "$CANDIDATE:refs/heads/main" "$NIGHTLY:refs/heads/upstream" :refs/heads/sync/candidate
-
