@@ -1,0 +1,96 @@
+# Builds Sema for Apple silicon. Pushes to main publish it as the latest
+# release; pull requests that touch the release files only build it and upload
+# the DMG as an artifact. The build is unsigned and has no update feed, because
+# macOS refuses to auto-update an unsigned app; install-macos.sh installs or
+# updates it instead.
+name: Fork Release
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - .github/workflows/fork-release.yml
+      - .github/fork/**
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fork-release-${{ github.event.pull_request.number || 'main' }}
+  cancel-in-progress: true
+
+jobs:
+  mac:
+    name: macOS arm64
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          filter: blob:none
+
+      - name: Resolve version from the nightly main is based on
+        id: version
+        run: |
+          base=$(git rev-parse origin/upstream)
+          tag=$(git ls-remote --tags https://github.com/pingdotgg/t3code.git 'refs/tags/v*-nightly.*' \
+            | awk -v sha="$base" '$1 == sha { sub("refs/tags/", "", $2); print $2 }' | tail -1)
+          if [[ -z "$tag" ]]; then
+            echo "No upstream nightly tag points at upstream branch $base." >&2
+            exit 1
+          fi
+          echo "upstream_tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+
+      - run: node .github/fork/apply-identity.mjs
+
+      - uses: ./.github/actions/setup-ci-deps
+
+      - run: node scripts/update-release-package-versions.ts "${{ steps.version.outputs.version }}"
+
+      - name: Build DMG
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          T3CODE_DESKTOP_OUTPUT_DIR: ${{ runner.temp }}/release
+        run: |
+          env -u GITHUB_REPOSITORY -u T3CODE_DESKTOP_UPDATE_REPOSITORY \
+            node scripts/build-desktop-artifact.ts --platform mac --target dmg --arch arm64 \
+            --build-version "$VERSION" --verbose
+          ls -la "$T3CODE_DESKTOP_OUTPUT_DIR"
+
+      - if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v7
+        with:
+          name: sema-macos-arm64
+          path: ${{ runner.temp }}/release/*.dmg
+          retention-days: 7
+
+      - name: Publish release
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+          UPSTREAM_TAG: ${{ steps.version.outputs.upstream_tag }}
+          OUT: ${{ runner.temp }}/release
+        run: |
+          tag="sema-v$VERSION"
+          gh release delete "$tag" --cleanup-tag --yes 2>/dev/null || true
+          notes="Built from \`${GITHUB_SHA::10}\` on upstream [\`$UPSTREAM_TAG\`](https://github.com/pingdotgg/t3code/releases/tag/$UPSTREAM_TAG).
+
+          Install or update on Apple silicon:
+          \`\`\`sh
+          curl -fsSL https://raw.githubusercontent.com/$GITHUB_REPOSITORY/main/.github/fork/install-macos.sh | bash
+          \`\`\`"
+          gh release create "$tag" "$OUT"/*.dmg --target "$GITHUB_SHA" --title "Sema $VERSION" --notes "$notes" --latest
+
+      - name: Keep the 10 newest releases
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release list --limit 100 --json tagName,createdAt \
+            --jq '[.[] | select(.tagName | startswith("sema-v"))] | sort_by(.createdAt) | reverse | .[10:] | .[].tagName' \
+            | while read -r tag; do gh release delete "$tag" --cleanup-tag --yes; done
