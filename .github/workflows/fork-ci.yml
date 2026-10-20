@@ -14,6 +14,11 @@ on:
 permissions:
   contents: read
 
+# Builds read the release repository from GITHUB_REPOSITORY, which is this fork
+# here; tests expect upstream's.
+env:
+  T3CODE_DESKTOP_UPDATE_REPOSITORY: pingdotgg/t3code
+
 concurrency:
   group: fork-ci-${{ inputs.ref || github.event.pull_request.number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
