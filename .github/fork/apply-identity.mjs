@@ -4,7 +4,7 @@
 // the ~/.sema state directory (server database, `t3` CLI shim).
 // Every replacement must match exactly `count` times; an upstream rename
 // fails the build instead of shipping a half-renamed app.
-import { readFileSync, writeFileSync } from "node:fs";
+import * as NodeFS from "node:fs";
 
 const APP_ID = "dev.richardamare.sema";
 
@@ -86,7 +86,7 @@ const replacements = [
 const contents = new Map();
 const failures = [];
 for (const [file, from, to, count] of replacements) {
-  const source = contents.get(file) ?? readFileSync(file, "utf8");
+  const source = contents.get(file) ?? NodeFS.readFileSync(file, "utf8");
   const found = source.split(from).length - 1;
   if (found !== count) {
     failures.push(`${file}: expected ${count} of ${JSON.stringify(from)}, found ${found}`);
@@ -98,5 +98,5 @@ if (failures.length > 0) {
   console.error(`Identity patch no longer matches upstream:\n  ${failures.join("\n  ")}`);
   process.exit(1);
 }
-for (const [file, source] of contents) writeFileSync(file, source);
+for (const [file, source] of contents) NodeFS.writeFileSync(file, source);
 console.log(`Applied ${replacements.length} identity replacements.`);
